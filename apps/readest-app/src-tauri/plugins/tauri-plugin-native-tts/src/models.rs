@@ -40,6 +40,22 @@ pub struct SpeakResponse {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SynthesizeArgs {
+    pub text: String,
+    pub voice: Option<String>,
+    pub lang: Option<String>,
+    pub pitch: Option<f32>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SynthesizeResponse {
+    // Base64-encoded WAV.
+    pub data: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SetRateArgs {
     pub rate: f32,
 }

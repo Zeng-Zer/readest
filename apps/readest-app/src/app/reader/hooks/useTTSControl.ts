@@ -969,6 +969,7 @@ export const useTTSControl = ({ bookKey, onRequestHidePanel }: UseTTSControlProp
           !!user?.id,
           preprocessSSMLForTTS,
           handleSectionChange,
+          { pregenerateSystemTTS: viewSettings.ttsPregenerateSystemTTS ?? true },
         );
         ttsController.setSkipInlineAnnotations(viewSettings.ttsSkipInlineAnnotations ?? false);
         // The constructor takes the view directly (attachView, which also binds

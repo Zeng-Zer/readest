@@ -29,6 +29,15 @@ vi.mock('@/services/tts/NativeTTSClient', () => ({
   }),
 }));
 
+vi.mock('@/services/tts/BufferedNativeTTSClient', () => ({
+  BufferedNativeTTSClient: vi.fn().mockImplementation(function (this: Record<string, unknown>) {
+    Object.assign(this, createMockTTSClient('native-buffered'), {
+      setSentenceGap: vi.fn(),
+      setParagraphGap: vi.fn(),
+    });
+  }),
+}));
+
 // Track the inaudible background keep-alive (WebAudio) toggled for direct-speak
 // engines. Arrow closures so the vi.mock hoist never hits a TDZ on these consts.
 const startKeepAlive = vi.fn();
@@ -273,6 +282,22 @@ describe('TTSController', () => {
       expect(controller.ttsNativeClient).toBeNull();
     });
 
+    test('pre-generates system TTS on Android when asked to', () => {
+      const androidService = createMockAppService(true);
+      const c = new TTSController(androidService, mockView, false, undefined, undefined, {
+        pregenerateSystemTTS: true,
+      });
+      expect(c.ttsNativeClient?.name).toBe('native-buffered');
+    });
+
+    test('keeps speaking system TTS directly on iOS', () => {
+      const iosService = createMockAppService(false, true);
+      const c = new TTSController(iosService, mockView, false, undefined, undefined, {
+        pregenerateSystemTTS: true,
+      });
+      expect(c.ttsNativeClient?.name).toBe('native');
+    });
+
     test('stores preprocessCallback', () => {
       const cb = vi.fn();
       const c = new TTSController(mockAppService, mockView, false, cb);
@@ -358,6 +383,23 @@ describe('TTSController', () => {
     test('delegates to ttsEdgeClient.setSentenceGap with the given value', () => {
       controller.setSentenceGap(0.5);
       expect(controller.ttsEdgeClient.setSentenceGap).toHaveBeenCalledWith(0.5);
+    });
+
+    test('also reaches a native client that schedules its own pauses', () => {
+      const c = new TTSController(
+        createMockAppService(true),
+        mockView,
+        false,
+        undefined,
+        undefined,
+        {
+          pregenerateSystemTTS: true,
+        },
+      );
+      c.setSentenceGap(0.2);
+      c.setParagraphGap(0.4);
+      expect(c.ttsNativeClient?.setSentenceGap).toHaveBeenCalledWith(0.2);
+      expect(c.ttsNativeClient?.setParagraphGap).toHaveBeenCalledWith(0.4);
     });
   });
 

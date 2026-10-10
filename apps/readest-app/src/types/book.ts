@@ -425,6 +425,9 @@ export interface TTSConfig {
   ttsSkipInlineAnnotations: boolean;
   // Sentence-by-sentence Read Aloud: pause after every sentence (#5233).
   ttsPauseAfterSentence: boolean;
+  // Android: synthesize system TTS sentences ahead of playback instead of
+  // asking the engine for each one only after the previous finishes.
+  ttsPregenerateSystemTTS: boolean;
 }
 
 export interface TranslatorConfig {

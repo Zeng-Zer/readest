@@ -7,12 +7,12 @@ import { TTSWordBoundary } from '@/libs/edgeTTS';
 import { TTSGranularity, TTSMark, TTSVoice, TTSVoicesGroup } from './types';
 import { AppService } from '@/types/system';
 import { parseSSMLMarks } from '@/utils/ssml';
-import { DEFAULT_PARAGRAPH_GAP_SEC, TTSController } from './TTSController';
+import type { TTSController } from './TTSController';
 import { TTSUtils } from './TTSUtils';
 import { findBoundaryIndexAtTime } from './wordHighlight';
 import { applyEdgeFade, findSpeechBounds } from './pcm';
 import { timeStretch } from './timeStretch';
-import { gapAfterSentence } from './gap';
+import { DEFAULT_PARAGRAPH_GAP_SEC, gapAfterSentence } from './gap';
 import {
   calibrateVoiceRate,
   recordMeasuredDuration,

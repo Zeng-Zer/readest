@@ -62,6 +62,10 @@ export interface TTSClient {
   // Cached per-ordinal audio durations (seconds) for a section under the
   // current voice; empty when the client has no persistent cache.
   getSectionDurations?(section: number): Promise<Map<number, number>>;
+  // Pauses after a sentence and between paragraphs, in wall-clock seconds;
+  // implemented by clients that schedule their own silence (gapControl).
+  setSentenceGap?(sec: number): void;
+  setParagraphGap?(sec: number): void;
   getVoiceId(): string;
   getSpeakingLang(): string;
   // Playback position within the currently audible sentence, in trimmed media

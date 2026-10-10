@@ -515,6 +515,7 @@ export const DEFAULT_TTS_CONFIG: TTSConfig = {
   ttsPlayerStyle: 'full',
   ttsSkipInlineAnnotations: false,
   ttsPauseAfterSentence: false,
+  ttsPregenerateSystemTTS: true,
 };
 
 export const DEFAULT_TRANSLATOR_CONFIG: TranslatorConfig = {

@@ -20,6 +20,8 @@ import { expandRangeOverRuby } from '@/utils/ruby';
 import { WebSpeechClient } from './WebSpeechClient';
 import { NativeTTSClient } from './NativeTTSClient';
 import { EdgeTTSClient } from './EdgeTTSClient';
+import { BufferedNativeTTSClient } from './BufferedNativeTTSClient';
+import { DEFAULT_PARAGRAPH_GAP_SEC } from './gap';
 import { SectionTimeline, TimelineSentence } from './SectionTimeline';
 import { hydrateProvisionalDurations } from './ttsDuration';
 import { DownloadableSentence, SectionEnumerator, TTSDownloader } from './TTSDownloader';
@@ -110,13 +112,9 @@ export interface TTSViewBindings {
   onSectionChange?: (sectionIndex: number) => Promise<void>;
 }
 
-// Silence inserted between paragraphs when auto-advancing during continuous
-// playback. Unlike the Edge-only inter-sentence gap, this applies to every
-// TTS client: the paragraph-to-paragraph transition (stop -> next -> speak)
-// is engine-agnostic, handled entirely in #speak()/forward() below. There is
-// no natural pause here otherwise -- the transition is as fast as the async
-// stop/init overhead allows, which reads as no pause at all.
-export const DEFAULT_PARAGRAPH_GAP_SEC = 0.3;
+// Lives in gap.ts so the buffered clients can read it without importing this
+// module, which constructs them.
+export { DEFAULT_PARAGRAPH_GAP_SEC };
 
 const drawLoopTint = (rects: DOMRectList, options: Record<string, unknown>) => {
   const g = Overlayer.highlight(rects, options);
@@ -231,13 +229,18 @@ export class TTSController extends EventTarget {
     isAuthenticated: boolean = false,
     preprocessCallback?: (ssml: string) => Promise<string>,
     onSectionChange?: (sectionIndex: number) => Promise<void>,
+    options: { pregenerateSystemTTS?: boolean } = {},
   ) {
     super();
     this.ttsWebClient = new WebSpeechClient(this);
     this.ttsEdgeClient = new EdgeTTSClient(this, appService);
     // Native TTS is backed by Android TextToSpeech and iOS AVSpeechSynthesizer.
+    // On Android the system voices can instead be synthesized ahead of the
+    // playhead and played by the app, so sentences follow without a pause.
     // TODO: implement native TTS client for desktop platforms.
-    if (appService?.isAndroidApp || appService?.isIOSApp) {
+    if (appService?.isAndroidApp && options.pregenerateSystemTTS) {
+      this.ttsNativeClient = new BufferedNativeTTSClient(this);
+    } else if (appService?.isAndroidApp || appService?.isIOSApp) {
       this.ttsNativeClient = new NativeTTSClient(this);
     }
     this.ttsMediaOverlayClient = new MediaOverlayClient(this);
@@ -1126,6 +1129,7 @@ export class TTSController extends EventTarget {
   // client (same as supportsPlaybackInfo/supportsGapControl's comparison).
   setSentenceGap(sec: number): void {
     this.ttsEdgeClient.setSentenceGap(sec);
+    this.ttsNativeClient?.setSentenceGap?.(sec);
   }
 
   // Universal (not Edge-only) paragraph-to-paragraph gap, in wall-clock
@@ -1136,6 +1140,7 @@ export class TTSController extends EventTarget {
     // The buffered client needs it too: it schedules this pause as silence on
     // its own audio clock rather than letting #delayParagraphGap sleep for it.
     this.ttsEdgeClient.setParagraphGap(sec);
+    this.ttsNativeClient?.setParagraphGap?.(sec);
   }
 
   // Abortable delay inserted before auto-advancing to the next paragraph.
@@ -1600,9 +1605,11 @@ export class TTSController extends EventTarget {
           }
           await this.preloadSSML(ssml, signal);
         }
-        // Only the native client surfaces an offline engine failure as a
-        // terminal 'error' code (Edge/Web throw, which the catch below handles).
-        const canSkipOnError = this.ttsClient === this.ttsNativeClient;
+        // Only the direct-speak native client surfaces an offline engine failure
+        // as a terminal 'error' code (Edge/Web throw, which the catch below
+        // handles; buffered clients skip failed sentences themselves).
+        const canSkipOnError =
+          this.ttsClient === this.ttsNativeClient && !this.ttsClient.getCapabilities().mediaClock;
         const iter = await this.ttsClient.speak(
           stepped ? truncateSSMLAfterMark(ssml, marks[0]!.name) : ssml,
           signal,

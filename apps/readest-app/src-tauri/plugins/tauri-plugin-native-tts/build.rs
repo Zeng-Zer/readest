@@ -1,6 +1,7 @@
 const COMMANDS: &[&str] = &[
     "init",
     "speak",
+    "synthesize",
     "stop",
     "pause",
     "resume",

@@ -1,40 +1,15 @@
 import { invoke } from '@tauri-apps/api/core';
 import { addPluginListener, PluginListener } from '@tauri-apps/api/core';
-import { getUserLocale } from '@/utils/misc';
-import { isSameLang } from '@/utils/lang';
 import { parseSSMLMarks } from '@/utils/ssml';
-import { stubTranslation as _ } from '@/utils/misc';
 import { TTSCapabilities, TTSClient, TTSMessageEvent } from './TTSClient';
-import { TTSGranularity, TTSMark, TTSVoice, TTSVoicesGroup } from './types';
+import { TTSGranularity, TTSMark, TTSVoice } from './types';
 import { TTSUtils } from './TTSUtils';
 import { TTSController } from './TTSController';
+import { fetchNativeVoices, groupNativeVoices } from './nativeVoices';
 
 type TTSEventPayload = {
   utteranceId: string;
 } & TTSMessageEvent;
-
-const TTSEngines = {
-  default: 'System TTS',
-  msctts: 'Msc TTS',
-  mstrans: 'MSTrans TTS',
-  microsoft: 'Microsoft TTS',
-  bytedance: 'ByteDance TTS',
-  peiyinya: 'PeiYinYa TTS',
-  huoshan: 'HuoShan TTS',
-  sougou: 'Sougou TTS',
-  xiaomi: 'XiaoMi TTS',
-  bdetts: 'BDeTTS',
-  bdotts: 'BDoTTS',
-  vcstts: 'VcsTTS',
-  isstts: 'IssTTS',
-  xfpeiyin: 'XFPeiYin',
-  azure: 'Azure TTS',
-  edgetts: 'Edge TTS',
-  google: 'Google TTS',
-  gemini: 'Gemini TTS',
-  weread: 'WeRead TTS',
-  aispeech: 'Aispeech',
-} as Record<string, string>;
 
 export class NativeTTSClient implements TTSClient {
   name = 'native-tts';
@@ -249,14 +224,7 @@ export class NativeTTSClient implements TTSClient {
       return this.#voices;
     }
     try {
-      const result = await invoke<{ voices: TTSVoice[] }>('plugin:native-tts|get_all_voices');
-      // Match Web Speech's Apple voice-family exclusions. iOS also exposes
-      // novelty and legacy Eloquence voices through the native API.
-      this.#voices = result.voices.filter(
-        (voice) =>
-          !voice.id.startsWith('com.apple.eloquence.') &&
-          !voice.id.startsWith('com.apple.speech.synthesis.voice.'),
-      );
+      this.#voices = await fetchNativeVoices();
       return this.#voices;
     } catch (error) {
       console.error('Failed to get all voices:', error);
@@ -265,47 +233,7 @@ export class NativeTTSClient implements TTSClient {
   }
 
   async getVoices(lang: string) {
-    const locale = lang === 'en' ? getUserLocale(lang) || lang : lang;
-    const voices = await this.getAllVoices();
-    // Match by primary language so the voice set stays the same across a book
-    // whose sections mix region variants (e.g. en-US front matter and en-GB
-    // body text); the requested locale's voices sort first. See #4033.
-    const filteredVoices = voices.filter((v) => isSameLang(v.lang, lang));
-    const voiceGroups = new Map<string, TTSVoice[]>();
-    filteredVoices.forEach((voice) => {
-      const { name, lang } = voice;
-      let groupId = voice.id.split('_')[0]!;
-      if (groupId in TTSEngines) {
-        voice.name = name
-          .replace(`${groupId}_`, '')
-          .replace(`${lang}-`, '')
-          .replace('Neural', '')
-          .trim();
-      } else {
-        groupId = 'default';
-      }
-      voice.name = voice.name.replace('NOT_SET', _('Default'));
-      if (!voiceGroups.has(groupId)) {
-        voiceGroups.set(groupId, []);
-      }
-      voiceGroups.get(groupId)!.push(voice);
-    });
-
-    return Array.from(voiceGroups.entries())
-      .map(
-        ([groupId, voices]) =>
-          ({
-            id: groupId,
-            name: TTSEngines[groupId] || groupId,
-            voices: voices.sort(TTSUtils.sortVoicesPreferLocaleFunc(locale)),
-            disabled: !this.initialized || voices.length === 0,
-          }) as TTSVoicesGroup,
-      )
-      .sort((a, b) => {
-        if (a.id === 'default') return -1;
-        if (b.id === 'default') return 1;
-        return a.id.localeCompare(b.id);
-      });
+    return groupNativeVoices(await this.getAllVoices(), lang, this.initialized);
   }
 
   setPrimaryLang(lang: string) {

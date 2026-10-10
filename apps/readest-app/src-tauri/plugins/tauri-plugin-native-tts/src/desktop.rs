@@ -23,6 +23,9 @@ impl<R: Runtime> NativeTts<R> {
     pub fn speak(&self, _args: SpeakArgs) -> crate::Result<SpeakResponse> {
         Err(crate::Error::UnsupportedPlatformError)
     }
+    pub fn synthesize(&self, _args: SynthesizeArgs) -> crate::Result<SynthesizeResponse> {
+        Err(crate::Error::UnsupportedPlatformError)
+    }
     pub fn pause(&self) -> crate::Result<()> {
         Err(crate::Error::UnsupportedPlatformError)
     }

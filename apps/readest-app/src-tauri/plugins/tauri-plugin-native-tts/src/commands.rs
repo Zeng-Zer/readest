@@ -18,6 +18,14 @@ pub(crate) async fn speak<R: Runtime>(
 }
 
 #[command]
+pub(crate) async fn synthesize<R: Runtime>(
+    app: AppHandle<R>,
+    payload: SynthesizeArgs,
+) -> Result<SynthesizeResponse> {
+    app.native_tts().synthesize(payload)
+}
+
+#[command]
 pub(crate) async fn pause<R: Runtime>(app: AppHandle<R>) -> Result<()> {
     app.native_tts().pause()
 }

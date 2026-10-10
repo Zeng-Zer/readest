@@ -43,6 +43,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             tauri::generate_handler![
             commands::init,
             commands::speak,
+            commands::synthesize,
             commands::stop,
             commands::pause,
             commands::resume,

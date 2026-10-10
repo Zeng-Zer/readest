@@ -18,7 +18,7 @@ import TTSHighlightStyleEditor, { TTSHighlightStyle } from './theme/TTSHighlight
 
 const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }) => {
   const _ = useTranslation();
-  const { envConfig } = useEnv();
+  const { envConfig, appService } = useEnv();
   const { getViewSettings } = useReaderStore();
   const { settings, setSettings, saveSettings } = useSettingsStore();
   const viewSettings = getViewSettings(bookKey) || settings.globalViewSettings;
@@ -35,6 +35,9 @@ const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }
   );
   const [ttsSkipInlineAnnotations, setTtsSkipInlineAnnotations] = useState(
     viewSettings.ttsSkipInlineAnnotations ?? false,
+  );
+  const [ttsPregenerateSystemTTS, setTtsPregenerateSystemTTS] = useState(
+    viewSettings.ttsPregenerateSystemTTS ?? true,
   );
   const [ttsHighlightStyle, setTtsHighlightStyle] = useState(
     viewSettings.ttsHighlightOptions.style,
@@ -63,6 +66,7 @@ const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }
         React.SetStateAction<string>
       >,
       ttsSkipInlineAnnotations: setTtsSkipInlineAnnotations,
+      ttsPregenerateSystemTTS: setTtsPregenerateSystemTTS,
     });
   };
 
@@ -108,6 +112,19 @@ const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ttsSkipInlineAnnotations]);
+
+  useEffect(() => {
+    if (ttsPregenerateSystemTTS === viewSettings.ttsPregenerateSystemTTS) return;
+    saveViewSettings(
+      envConfig,
+      bookKey,
+      'ttsPregenerateSystemTTS',
+      ttsPregenerateSystemTTS,
+      false,
+      false,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ttsPregenerateSystemTTS]);
 
   const handleTTSStyleChange = (style: TTSHighlightStyle) => {
     setTtsHighlightStyle(style);
@@ -166,6 +183,20 @@ const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }
             checked={ttsSkipInlineAnnotations}
             onChange={() => setTtsSkipInlineAnnotations(!ttsSkipInlineAnnotations)}
             data-setting-id='settings.tts.skipInlineAnnotations'
+          />
+        </BoxedList>
+      )}
+
+      {appService?.isAndroidApp && (
+        <BoxedList title={_('System TTS')} data-setting-id='settings.tts.systemTTS'>
+          <SettingsSwitchRow
+            label={_('Pre-generate Speech')}
+            description={_(
+              'Synthesize upcoming sentences while the current one plays. Applies the next time Read Aloud starts',
+            )}
+            checked={ttsPregenerateSystemTTS}
+            onChange={() => setTtsPregenerateSystemTTS(!ttsPregenerateSystemTTS)}
+            data-setting-id='settings.tts.pregenerateSystemTTS'
           />
         </BoxedList>
       )}

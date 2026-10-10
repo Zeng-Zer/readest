@@ -11,6 +11,14 @@
 // base/rate^1.6, which is 0.60s at 0.5x and 0.085s at 2x (#5750).
 const RATE_EXPONENT = 0.6;
 
+// Silence inserted between paragraphs when auto-advancing during continuous
+// playback. Unlike the Edge-only inter-sentence gap, this applies to every
+// TTS client: the paragraph-to-paragraph transition (stop -> next -> speak)
+// is engine-agnostic, handled entirely in TTSController#speak()/forward(). There is
+// no natural pause here otherwise -- the transition is as fast as the async
+// stop/init overhead allows, which reads as no pause at all.
+export const DEFAULT_PARAGRAPH_GAP_SEC = 0.3;
+
 export const scaleGapForRate = (baseGapSec: number, rate: number): number => {
   if (!(rate > 0)) return baseGapSec;
   // Two decimals: the gaps are sub-second by design, so rounding to a whole

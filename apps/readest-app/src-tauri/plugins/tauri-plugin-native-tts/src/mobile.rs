@@ -39,6 +39,14 @@ impl<R: Runtime> NativeTts<R> {
 }
 
 impl<R: Runtime> NativeTts<R> {
+    pub fn synthesize(&self, payload: SynthesizeArgs) -> crate::Result<SynthesizeResponse> {
+        self.0
+            .run_mobile_plugin("synthesize", payload)
+            .map_err(Into::into)
+    }
+}
+
+impl<R: Runtime> NativeTts<R> {
     pub fn pause(&self) -> crate::Result<()> {
         self.0.run_mobile_plugin("pause", ()).map_err(Into::into)
     }

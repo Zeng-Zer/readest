@@ -69,6 +69,14 @@ class SpeakArgs(
 )
 
 @InvokeArg
+class SynthesizeArgs(
+    val text: String? = "",
+    val voice: String? = null,
+    val lang: String? = null,
+    val pitch: Float? = 1.0f
+)
+
+@InvokeArg
 class SetRateArgs(
     val rate: Float? = 1.0f
 )
@@ -138,6 +146,7 @@ class NativeTTSPlugin(private val activity: Activity) : Plugin(activity) {
         private const val TAG = "NativeTTSPlugin"
         private const val CHANNEL_NAME = "tts_events"
         private const val IDLE_TIMEOUT_MS = 30L * 60 * 1000 // 30 minutes
+        private const val SYNTHESIS_TIMEOUT_MS = 2L * 60 * 1000
         var NOTIFICATION_TITLE = "Read Aloud"
         var NOTIFICATION_TEXT = "Ready to read aloud"
         var FOREGROUND_SERVICE_TITLE = "Read Aloud"
@@ -178,6 +187,11 @@ class NativeTTSPlugin(private val activity: Activity) : Plugin(activity) {
 
     private val eventChannels = ConcurrentHashMap<String, Channel<TTSMessageEvent>>()
     private val speakingJobs = ConcurrentHashMap<String, Job>()
+    // synthesizeToFile() utterances, completed with the engine's status code.
+    // They share the progress listener with speak() but never emit tts_events.
+    private val fileSynthesisJobs = ConcurrentHashMap<String, CompletableDeferred<Int>>()
+    // (voice id from JS, resolved Voice): resolving lists every engine voice.
+    private var lastSynthesisVoice: Pair<String, Voice>? = null
     private val coroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     private val idleHandler = Handler(Looper.getMainLooper())
@@ -204,6 +218,7 @@ class NativeTTSPlugin(private val activity: Activity) : Plugin(activity) {
     }
     
     private suspend fun initializeTTS(): Boolean = suspendCancellableCoroutine { continuation ->
+        lastSynthesisVoice = null
         try {
             val preferredEngine = Settings.Secure.getString(
                 activity.contentResolver,
@@ -235,6 +250,7 @@ class NativeTTSPlugin(private val activity: Activity) : Plugin(activity) {
         textToSpeech?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) {
                 utteranceId?.let { id ->
+                    if (fileSynthesisJobs.containsKey(id)) return
                     isSpeaking.set(true)
                     sendEvent(id, TTSMessageEvent("boundary", "start"))
                 }
@@ -242,6 +258,7 @@ class NativeTTSPlugin(private val activity: Activity) : Plugin(activity) {
             
             override fun onDone(utteranceId: String?) {
                 utteranceId?.let { id ->
+                    if (completeFileSynthesis(id, TextToSpeech.SUCCESS)) return
                     isSpeaking.set(false)
                     sendEvent(id, TTSMessageEvent("end"))
                     closeEventChannel(id)
@@ -251,6 +268,7 @@ class NativeTTSPlugin(private val activity: Activity) : Plugin(activity) {
             @Deprecated("deprecated in API level 21")
             override fun onError(utteranceId: String?) {
                 utteranceId?.let { id ->
+                    if (completeFileSynthesis(id, TextToSpeech.ERROR)) return
                     isSpeaking.set(false)
                     sendEvent(id, TTSMessageEvent("error", "TTS playback error"))
                     closeEventChannel(id)
@@ -259,12 +277,19 @@ class NativeTTSPlugin(private val activity: Activity) : Plugin(activity) {
             
             override fun onError(utteranceId: String?, errorCode: Int) {
                 utteranceId?.let { id ->
+                    if (completeFileSynthesis(id, errorCode)) return
                     isSpeaking.set(false)
                     sendEvent(id, TTSMessageEvent("error", "TTS playback error:$errorCode"))
                     closeEventChannel(id)
                 }
             }
             
+            // A flush (stop(), or a QUEUE_FLUSH speak()) drops queued file
+            // syntheses without onDone/onError.
+            override fun onStop(utteranceId: String?, interrupted: Boolean) {
+                utteranceId?.let { id -> completeFileSynthesis(id, TextToSpeech.STOPPED) }
+            }
+
             override fun onRangeStart(utteranceId: String?, start: Int, end: Int, frame: Int) {
                 utteranceId?.let { id ->
                     sendEvent(id, TTSMessageEvent("boundary", "range", "pos:$start-$end"))
@@ -350,6 +375,92 @@ class NativeTTSPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
     
+    // Render one utterance to WAV without playing it, returned base64-encoded.
+    // Unlike speak(), synthesizeToFile() is not throttled to playback speed
+    // (the framework blocks a speaking engine once ~500ms of unplayed audio is
+    // queued), so the app can synthesize sentences ahead of the playhead and
+    // play them itself.
+    @Command
+    fun synthesize(invoke: Invoke) {
+        cancelIdleTimer()
+
+        val args = invoke.parseArgs(SynthesizeArgs::class.java)
+        val text = args.text ?: ""
+        if (text.isEmpty()) {
+            invoke.reject("Text cannot be empty")
+            return
+        }
+
+        val utteranceId = UUID.randomUUID().toString()
+        coroutineScope.launch {
+            val file = File(activity.cacheDir, "tts-synthesis-$utteranceId.wav")
+            val done = CompletableDeferred<Int>()
+            fileSynthesisJobs[utteranceId] = done
+            try {
+                if (!isInitialized.get() && !initializeTTS()) {
+                    invoke.reject("Failed to initialize TTS engine")
+                    return@launch
+                }
+                val tts = textToSpeech ?: run {
+                    invoke.reject("TTS engine unavailable")
+                    return@launch
+                }
+
+                val voice = args.voice?.let { id ->
+                    lastSynthesisVoice?.takeIf { it.first == id }?.second
+                        ?: findVoice(id)?.also { lastSynthesisVoice = id to it }
+                }
+                if (voice != null) {
+                    tts.voice = voice
+                } else if (!args.lang.isNullOrEmpty()) {
+                    tts.language = Locale.forLanguageTag(args.lang)
+                }
+                // Always render at the engine's normal rate: the playback rate is
+                // applied by the app's player, which keeps the audio reusable.
+                tts.setSpeechRate(1.0f)
+                tts.setPitch(args.pitch ?: 1.0f)
+
+                val params = Bundle().apply {
+                    putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, utteranceId)
+                }
+                if (tts.synthesizeToFile(text, params, file, utteranceId) != TextToSpeech.SUCCESS) {
+                    invoke.reject("Failed to queue synthesis")
+                    return@launch
+                }
+
+                when (val status = withTimeoutOrNull(SYNTHESIS_TIMEOUT_MS) { done.await() }) {
+                    null -> invoke.reject("Synthesis timed out")
+                    TextToSpeech.SUCCESS -> {
+                        val data = withContext(Dispatchers.IO) {
+                            android.util.Base64.encodeToString(file.readBytes(), android.util.Base64.NO_WRAP)
+                        }
+                        invoke.resolve(JSObject().apply { put("data", data) })
+                    }
+                    else -> invoke.reject("Synthesis failed: $status")
+                }
+            } catch (e: Exception) {
+                invoke.reject("Exception during synthesis: ${e.message}")
+            } finally {
+                fileSynthesisJobs.remove(utteranceId)
+                file.delete()
+                startIdleTimer()
+            }
+        }
+    }
+
+    private fun completeFileSynthesis(utteranceId: String, status: Int): Boolean {
+        val job = fileSynthesisJobs[utteranceId] ?: return false
+        job.complete(status)
+        return true
+    }
+
+    private fun findVoice(id: String): Voice? {
+        return textToSpeech?.voices?.find { voice ->
+            val languageTag = voice.locale.toLanguageTag()
+            voice.name == id || (languageTag.contains(voice.name) && languageTag == id)
+        }
+    }
+
     private fun startEventStream(utteranceId: String) {
         coroutineScope.launch {
             val channel = eventChannels[utteranceId] ?: return@launch
@@ -461,11 +572,7 @@ class NativeTTSPlugin(private val activity: Activity) : Plugin(activity) {
                 if (!isInitialized.get()) {
                     initializeTTS()
                 }
-                val voices = textToSpeech?.voices
-                val targetVoice = voices?.find { voice ->
-                    val languageTag = voice.locale.toLanguageTag()
-                    voice.name == args.voice || (languageTag.contains(voice.name) && languageTag == args.voice)
-                }
+                val targetVoice = args.voice?.let { findVoice(it) }
 
                 if (targetVoice != null) {
                     val result = textToSpeech?.setVoice(targetVoice)
