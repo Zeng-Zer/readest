@@ -156,10 +156,8 @@ export class BufferedTTSClient implements TTSClient {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       if (signal.aborted) return undefined;
       try {
-        // Rate is deliberately absent from the request: the provider
-        // synthesizes at rate 1.0 and playout applies the playback rate.
         const { audio, boundaries } = await this.provider.synthesize(
-          { lang, text, voice: voiceId, pitch: this.#pitch },
+          this.buildRequest(lang, text, voiceId),
           signal,
         );
         return { data: audio, boundaries };
@@ -174,6 +172,24 @@ export class BufferedTTSClient implements TTSClient {
     }
     throw lastError;
   };
+
+  // The request the scheduler sends for a sentence. Rate is absent unless the
+  // provider renders it natively (maxRenderRate); otherwise the provider
+  // synthesizes at 1.0 and playout applies the playback rate.
+  protected buildRequest(lang: string, text: string, voice: string): SpeechSynthesisRequest {
+    const req: SpeechSynthesisRequest = { lang, text, voice, pitch: this.#pitch };
+    const renderRate = this.#renderRate(this.#rate);
+    if (renderRate !== 1) req.rate = renderRate;
+    return req;
+  }
+
+  // The part of the playback rate the provider renders itself. Only the web
+  // player can take it: the native player applies the whole rate at playout.
+  #renderRate(rate: number): number {
+    const max = this.provider.maxRenderRate;
+    if (!max || this.#player instanceof NativeAudioPlayer) return 1;
+    return Math.min(rate, max);
+  }
 
   #recordDurations = (
     voiceId: string,
@@ -366,12 +382,7 @@ export class BufferedTTSClient implements TTSClient {
         this.#speakingLang = mark.language;
         this.#currentVoiceId = voiceId;
 
-        const req: SpeechSynthesisRequest = {
-          lang: mark.language,
-          text: mark.text,
-          voice: voiceId,
-          pitch: this.#pitch,
-        };
+        const req = this.buildRequest(mark.language, mark.text, voiceId);
         let audio: { data: ArrayBuffer; boundaries: TTSWordBoundary[] } | undefined;
         try {
           audio = await this.#synthesizeWithRetry(mark.language, mark.text, voiceId, signal);
@@ -445,7 +456,12 @@ export class BufferedTTSClient implements TTSClient {
           trimmedDurationSec: number;
         };
         try {
-          prepared = await this.#prepareChunkBuffer(webPlayer, audio.data, rate);
+          prepared = await this.#prepareChunkBuffer(
+            webPlayer,
+            audio.data,
+            rate,
+            this.#renderRate(rate),
+          );
         } catch (error) {
           // Malformed MP3 must not dead-end the session: same UX as no-audio.
           console.warn('Failed to decode TTS audio for:', mark.text, error);
@@ -480,10 +496,14 @@ export class BufferedTTSClient implements TTSClient {
     }
   }
 
+  // renderedRate: the rate the provider already rendered at. Only the rest is
+  // time-stretched here, and times are reported in rate-1.0 media seconds
+  // either way, so durations and positions don't depend on who sped it up.
   async #prepareChunkBuffer(
     player: WebAudioPlayer,
     data: ArrayBuffer,
     rate: number,
+    renderedRate: number,
   ): Promise<{ buffer: TTSAudioBuffer; trimStartSec: number; trimmedDurationSec: number }> {
     // decodeAudioData resamples to the context rate (44.1/48kHz on real
     // devices, not the stream's 24kHz) — all math below must use the decoded
@@ -497,13 +517,18 @@ export class BufferedTTSClient implements TTSClient {
     // A subarray is a view; timeStretch never writes its input and
     // createMonoBuffer copies, so no mutation can reach the decoded buffer.
     const trimmed = channel.subarray(startSample, endSample);
-    const trimmedDurationSec = trimmed.length / sampleRate;
-    const samples = rate !== 1 ? timeStretch(trimmed, sampleRate, rate) : trimmed;
+    const trimmedDurationSec = (trimmed.length / sampleRate) * renderedRate;
+    const stretch = rate / renderedRate;
+    const samples = stretch !== 1 ? timeStretch(trimmed, sampleRate, stretch) : trimmed;
     const buffer = await player.createMonoBuffer(samples, sampleRate);
     // Silence-trimmed edges sit on non-zero samples; fade the buffer's own copy
     // so chunk starts/ends don't click against the inter-sentence gap.
     applyEdgeFade(buffer.getChannelData(0), sampleRate);
-    return { buffer, trimStartSec: startSample / sampleRate, trimmedDurationSec };
+    return {
+      buffer,
+      trimStartSec: (startSample / sampleRate) * renderedRate,
+      trimmedDurationSec,
+    };
   }
 
   // Poll the audio clock (visual concern only, so rAF throttling with the
@@ -651,7 +676,7 @@ export class BufferedTTSClient implements TTSClient {
   ): Promise<boolean> {
     if (!(this.provider instanceof CachingProvider)) return false;
     const voiceId = await this.getVoiceIdFromLang(lang);
-    const req = { lang, text, voice: voiceId, pitch: this.#pitch };
+    const req = this.buildRequest(lang, text, voiceId);
     try {
       // Retry transient failures exactly like live playback: a single network
       // blip (DNS, socket reset) must not drop a sentence and fail a chapter.

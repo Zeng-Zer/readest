@@ -144,6 +144,37 @@ describe('BufferedNativeTTSClient', () => {
     expect(rendered).toHaveLength(3);
   });
 
+  test('has the engine render the playback rate instead of stretching it', async () => {
+    const client = await startClient();
+    await client.setRate(1.75);
+    const { done } = speak(client, '<p2/>');
+    for (let i = 0; i < 5; i++) await flush();
+
+    const rates = h.invoke.mock.calls
+      .filter(([command]) => command === 'plugin:native-tts|synthesize')
+      .map(([, args]) => (args as { payload: { rate: number } }).payload.rate);
+    expect(rates).toEqual([1.75]);
+    // One second of audio, played as rendered: not time-stretched again.
+    expect(FakeAudioContext.instances[0]!.sources[0]!.buffer!.duration).toBeCloseTo(1, 2);
+    await FakeAudioContext.instances[0]!.advanceTo(5);
+    await done;
+  });
+
+  test('stretches only the rate beyond what the engine renders', async () => {
+    const client = await startClient();
+    await client.setRate(3);
+    const { done } = speak(client, '<p2/>');
+    for (let i = 0; i < 5; i++) await flush();
+
+    const rates = h.invoke.mock.calls
+      .filter(([command]) => command === 'plugin:native-tts|synthesize')
+      .map(([, args]) => (args as { payload: { rate: number } }).payload.rate);
+    expect(rates).toEqual([2]);
+    expect(FakeAudioContext.instances[0]!.sources[0]!.buffer!.duration).toBeCloseTo(1 / 1.5, 1);
+    await FakeAudioContext.instances[0]!.advanceTo(5);
+    await done;
+  });
+
   test('lists the system voices like the direct-speak client', async () => {
     const client = await startClient();
     const groups = await client.getVoices('en');

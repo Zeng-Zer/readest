@@ -13,10 +13,9 @@ import type { TTSController } from './TTSController';
 // sentence only once the previous one has finished playing.
 export class BufferedNativeTTSClient extends BufferedTTSClient {
   readonly #system: SystemSpeechProvider;
-  // Mirrors of the base client's private state, needed to build the same
-  // requests the scheduler will make.
+  // Mirror of the base client's primary language, which parses marks the
+  // same way the scheduler does.
   #primaryLang = 'en';
-  #pitch = 1.0;
 
   constructor(controller?: TTSController) {
     const provider = new SystemSpeechProvider();
@@ -50,7 +49,7 @@ export class BufferedNativeTTSClient extends BufferedTTSClient {
     const reqs: SpeechSynthesisRequest[] = [];
     for (const mark of marks) {
       const voice = await this.getVoiceIdFromLang(mark.language);
-      reqs.push({ lang: mark.language, text: mark.text, voice, pitch: this.#pitch });
+      reqs.push(this.buildRequest(mark.language, mark.text, voice));
     }
     return reqs;
   }
@@ -58,11 +57,6 @@ export class BufferedNativeTTSClient extends BufferedTTSClient {
   override setPrimaryLang(lang: string) {
     super.setPrimaryLang(lang);
     this.#primaryLang = lang;
-  }
-
-  override async setPitch(pitch: number) {
-    await super.setPitch(pitch);
-    this.#pitch = pitch;
   }
 
   override async getVoices(lang: string) {

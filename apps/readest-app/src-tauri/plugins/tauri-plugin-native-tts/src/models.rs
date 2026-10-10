@@ -45,6 +45,7 @@ pub struct SynthesizeArgs {
     pub voice: Option<String>,
     pub lang: Option<String>,
     pub pitch: Option<f32>,
+    pub rate: Option<f32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

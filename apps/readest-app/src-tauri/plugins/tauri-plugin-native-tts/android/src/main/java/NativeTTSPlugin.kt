@@ -73,7 +73,8 @@ class SynthesizeArgs(
     val text: String? = "",
     val voice: String? = null,
     val lang: String? = null,
-    val pitch: Float? = 1.0f
+    val pitch: Float? = 1.0f,
+    val rate: Float? = 1.0f
 )
 
 @InvokeArg
@@ -415,9 +416,10 @@ class NativeTTSPlugin(private val activity: Activity) : Plugin(activity) {
                 } else if (!args.lang.isNullOrEmpty()) {
                     tts.setLanguage(Locale.forLanguageTag(args.lang))
                 }
-                // Always render at the engine's normal rate: the playback rate is
-                // applied by the app's player, which keeps the audio reusable.
-                tts.setSpeechRate(1.0f)
+                // The app asks for the playback rate when the engine can render
+                // it (local models produce fewer frames, so render faster);
+                // anything beyond that is time-stretched by the app's player.
+                tts.setSpeechRate(args.rate ?: 1.0f)
                 tts.setPitch(args.pitch ?: 1.0f)
 
                 val params = Bundle().apply {

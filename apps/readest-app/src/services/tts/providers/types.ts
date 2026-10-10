@@ -6,9 +6,10 @@
 // synthesizing to buffers — is one adapter implementing this contract.
 //
 // Invariants every provider must uphold:
-// - The playback RATE is never sent to the provider. Rate is a playout
-//   concern (WSOLA on the web path, AVPlayer timeDomain on iOS), which keeps
-//   synthesized audio rate-independent and therefore cacheable.
+// - The playback RATE is not sent to the provider unless it declares
+//   `maxRenderRate`. Rate is otherwise a playout concern (WSOLA on the web
+//   path, AVPlayer timeDomain on iOS), which keeps synthesized audio
+//   rate-independent and therefore cacheable.
 // - `boundaries` use the Edge wire shape (100ns ticks from stream start,
 //   verbatim text spans); providers convert at their edge. Absent boundaries
 //   simply degrade word highlighting to sentence highlighting.
@@ -21,6 +22,8 @@ export interface SpeechSynthesisRequest {
   text: string;
   voice: string;
   pitch: number;
+  // Speaking rate to render at; only set for providers with maxRenderRate.
+  rate?: number;
 }
 
 export interface SpeechSynthesisResult {
@@ -57,6 +60,11 @@ export interface SpeechProvider {
   pickDefaultVoice?(voices: TTSVoice[]): string | undefined;
   // Last-resort voice when nothing matched and no voice was ever selected.
   readonly fallbackVoiceId?: string;
+  // Fastest rate the engine renders natively, for engines where that beats
+  // time-stretching at playout: a local model speaking faster produces fewer
+  // frames, so it renders in less time and sounds more natural. The client
+  // renders at min(rate, maxRenderRate) and time-stretches only the rest.
+  readonly maxRenderRate?: number;
   // Whether synthesized audio may be persisted. Some services forbid
   // storing their output; CachingProvider bypasses the store when false.
   readonly cacheable?: boolean;

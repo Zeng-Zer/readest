@@ -17,6 +17,7 @@ type Render = {
   text: string;
   payload: Record<string, unknown>;
   finish: (bytes: number) => void;
+  done: boolean;
 };
 let renders: Render[];
 
@@ -31,8 +32,9 @@ const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 const rendered = () => renders.map((render) => render.text);
 
 const finish = async (text: string, bytes = 100) => {
-  const render = renders.find((r) => r.text === text);
-  if (!render) throw new Error(`"${text}" never started rendering`);
+  const render = renders.find((r) => r.text === text && !r.done);
+  if (!render) throw new Error(`"${text}" is not rendering`);
+  render.done = true;
   render.finish(bytes);
   await flush();
 };
@@ -51,6 +53,7 @@ describe('SystemSpeechProvider', () => {
             text: args!.payload['text'] as string,
             payload: args!.payload,
             finish: (bytes) => resolve({ data: btoa('\u0001'.repeat(bytes)) }),
+            done: false,
           });
         }),
     );
@@ -61,9 +64,9 @@ describe('SystemSpeechProvider', () => {
     vi.restoreAllMocks();
   });
 
-  test('renders at the requested voice and pitch, leaving the rate to playout', async () => {
+  test('renders at the requested voice, pitch and rate', async () => {
     const result = provider.synthesize(
-      { lang: 'en-US', text: 'Hello there.', voice: 'en-us-voice', pitch: 1.2 },
+      { lang: 'en-US', text: 'Hello there.', voice: 'en-us-voice', pitch: 1.2, rate: 1.75 },
       signal(),
     );
     await flush();
@@ -72,9 +75,21 @@ describe('SystemSpeechProvider', () => {
       voice: 'en-us-voice',
       lang: 'en-US',
       pitch: 1.2,
+      rate: 1.75,
     });
     await finish('Hello there.', 100);
     expect((await result).audio.byteLength).toBe(100);
+  });
+
+  test('keeps a sentence rendered at one rate apart from another rate', async () => {
+    provider.prefetch([{ ...req('Twice.'), rate: 1.5 }], true);
+    await flush();
+    await finish('Twice.');
+    const other = provider.synthesize({ ...req('Twice.'), rate: 2 }, signal());
+    await flush();
+    expect(renders.map((r) => r.payload['rate'])).toEqual([1.5, 2]);
+    await finish('Twice.');
+    await other;
   });
 
   test('renders one sentence at a time', async () => {

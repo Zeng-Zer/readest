@@ -45,7 +45,7 @@ interface Job {
 }
 
 const requestKey = (req: SpeechSynthesisRequest) =>
-  [req.voice, req.lang, req.pitch, req.text].join('\u0000');
+  [req.voice, req.lang, req.pitch, req.rate ?? 1, req.text].join('\u0000');
 
 const fromBase64 = (data: string): ArrayBuffer => {
   const binary = atob(data);
@@ -62,6 +62,9 @@ export class SystemSpeechProvider implements SpeechProvider {
   readonly id = 'native-tts';
   readonly label = 'System TTS';
   readonly cacheable = false;
+  // Android's speech rate scale; engines honour at least 2x (HayaiTTS caps
+  // there), and faster playback is time-stretched on top.
+  readonly maxRenderRate = 2;
 
   #cache = new Map<string, ArrayBuffer>();
   #cacheBytes = 0;
@@ -217,7 +220,13 @@ export class SystemSpeechProvider implements SpeechProvider {
 
   async #render(req: SpeechSynthesisRequest): Promise<ArrayBuffer> {
     const { data } = await invoke<{ data: string }>('plugin:native-tts|synthesize', {
-      payload: { text: req.text, voice: req.voice || undefined, lang: req.lang, pitch: req.pitch },
+      payload: {
+        text: req.text,
+        voice: req.voice || undefined,
+        lang: req.lang,
+        pitch: req.pitch,
+        rate: req.rate ?? 1,
+      },
     });
     const audio = fromBase64(data);
     // Header only: the engine had nothing to say (e.g. bare punctuation), and
