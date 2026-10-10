@@ -12,6 +12,8 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import type { TTSVoice } from '../types';
+import type { TTSWordBoundary } from '@/libs/edgeTTS';
+import { estimateWordBoundaries } from '../estimateWordBoundaries';
 import { fetchNativeVoices } from '../nativeVoices';
 import {
   SpeechProvider,
@@ -31,11 +33,17 @@ const CACHE_BUDGET_BYTES = 32 * 1024 * 1024;
 // for again within this long is for a position the reader has left.
 export const PRELOAD_TTL_MS = 2000;
 
+// A rendered sentence: the engine's WAV and the word timings estimated from it.
+interface Rendered {
+  audio: ArrayBuffer;
+  boundaries: TTSWordBoundary[];
+}
+
 interface Job {
   key: string;
   req: SpeechSynthesisRequest;
-  promise: Promise<ArrayBuffer>;
-  resolve: (audio: ArrayBuffer) => void;
+  promise: Promise<Rendered>;
+  resolve: (rendered: Rendered) => void;
   reject: (error: unknown) => void;
   // The player is waiting for it, not just a prefetch.
   urgent: boolean;
@@ -66,7 +74,7 @@ export class SystemSpeechProvider implements SpeechProvider {
   // there), and faster playback is time-stretched on top.
   readonly maxRenderRate = 2;
 
-  #cache = new Map<string, ArrayBuffer>();
+  #cache = new Map<string, Rendered>();
   #cacheBytes = 0;
   #pending = new Map<string, Job>();
   #running: Job | null = null;
@@ -99,14 +107,14 @@ export class SystemSpeechProvider implements SpeechProvider {
   ): Promise<SpeechSynthesisResult> {
     if (signal.aborted) throw abortError();
     const key = requestKey(req);
-    let audio = this.#cacheGet(key);
-    if (!audio) {
+    let rendered = this.#cacheGet(key);
+    if (!rendered) {
       const job = this.#enqueue(key, req, true);
       this.#pump();
-      audio = await this.#waitFor(job, signal);
+      rendered = await this.#waitFor(job, signal);
     }
     // A fresh copy per call: decodeAudioData detaches its input.
-    return { audio: audio.slice(0), boundaries: [] };
+    return { audio: rendered.audio.slice(0), boundaries: rendered.boundaries };
   }
 
   // Queue one paragraph's sentences behind whatever the player is waiting
@@ -145,7 +153,7 @@ export class SystemSpeechProvider implements SpeechProvider {
     }
     let resolve!: Job['resolve'];
     let reject!: Job['reject'];
-    const promise = new Promise<ArrayBuffer>((res, rej) => {
+    const promise = new Promise<Rendered>((res, rej) => {
       resolve = res;
       reject = rej;
     });
@@ -175,7 +183,7 @@ export class SystemSpeechProvider implements SpeechProvider {
     }
   }
 
-  #waitFor(job: Job, signal: AbortSignal): Promise<ArrayBuffer> {
+  #waitFor(job: Job, signal: AbortSignal): Promise<Rendered> {
     return new Promise((resolve, reject) => {
       const onAbort = () => {
         // Nobody waits for it now; left queued as a prefetch, it is dropped
@@ -195,9 +203,9 @@ export class SystemSpeechProvider implements SpeechProvider {
     this.#pending.delete(job.key);
     this.#running = job;
     this.#render(job.req)
-      .then((audio) => {
-        this.#cachePut(job.key, audio);
-        job.resolve(audio);
+      .then((rendered) => {
+        this.#cachePut(job.key, rendered);
+        job.resolve(rendered);
       }, job.reject)
       .finally(() => {
         this.#running = null;
@@ -218,7 +226,7 @@ export class SystemSpeechProvider implements SpeechProvider {
     return playing ?? preloaded;
   }
 
-  async #render(req: SpeechSynthesisRequest): Promise<ArrayBuffer> {
+  async #render(req: SpeechSynthesisRequest): Promise<Rendered> {
     const { data } = await invoke<{ data: string }>('plugin:native-tts|synthesize', {
       payload: {
         text: req.text,
@@ -234,28 +242,30 @@ export class SystemSpeechProvider implements SpeechProvider {
     if (audio.byteLength <= WAV_HEADER_BYTES) {
       throw new SpeechSynthesisPermanentError('No audio data received.');
     }
-    return audio;
+    // System engines report no word timings through file synthesis; estimate
+    // them, in the rate-1.0 media time the player reports.
+    return { audio, boundaries: estimateWordBoundaries(req.text, audio, req.rate ?? 1) };
   }
 
-  #cacheGet(key: string): ArrayBuffer | undefined {
-    const audio = this.#cache.get(key);
-    if (audio) {
+  #cacheGet(key: string): Rendered | undefined {
+    const rendered = this.#cache.get(key);
+    if (rendered) {
       this.#cache.delete(key);
-      this.#cache.set(key, audio);
+      this.#cache.set(key, rendered);
     }
-    return audio;
+    return rendered;
   }
 
-  #cachePut(key: string, audio: ArrayBuffer): void {
+  #cachePut(key: string, rendered: Rendered): void {
     const previous = this.#cache.get(key);
-    if (previous) this.#cacheBytes -= previous.byteLength;
+    if (previous) this.#cacheBytes -= previous.audio.byteLength;
     this.#cache.delete(key);
-    this.#cache.set(key, audio);
-    this.#cacheBytes += audio.byteLength;
-    for (const [oldKey, oldAudio] of this.#cache) {
+    this.#cache.set(key, rendered);
+    this.#cacheBytes += rendered.audio.byteLength;
+    for (const [oldKey, old] of this.#cache) {
       if (this.#cacheBytes <= CACHE_BUDGET_BYTES) break;
       this.#cache.delete(oldKey);
-      this.#cacheBytes -= oldAudio.byteLength;
+      this.#cacheBytes -= old.audio.byteLength;
     }
   }
 }

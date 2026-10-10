@@ -3,7 +3,7 @@ import { BufferedTTSClient } from './BufferedTTSClient';
 import { groupNativeVoices } from './nativeVoices';
 import { SystemSpeechProvider } from './providers/system';
 import { SpeechSynthesisRequest } from './providers/types';
-import { TTSCapabilities, TTSMessageEvent } from './TTSClient';
+import { TTSMessageEvent } from './TTSClient';
 import type { TTSController } from './TTSController';
 
 // Android system voices played through the buffered pipeline: sentences are
@@ -61,10 +61,5 @@ export class BufferedNativeTTSClient extends BufferedTTSClient {
 
   override async getVoices(lang: string) {
     return groupNativeVoices(await this.getAllVoices(), lang, this.initialized);
-  }
-
-  override getCapabilities(): TTSCapabilities {
-    // synthesizeToFile() reports no word timings.
-    return { ...super.getCapabilities(), wordBoundaries: false };
   }
 }

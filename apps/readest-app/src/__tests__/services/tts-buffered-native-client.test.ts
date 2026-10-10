@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { TTSMessageEvent } from '@/services/tts/TTSClient';
 import type { TTSController } from '@/services/tts/TTSController';
 import { FakeAudioContext } from './tts-fake-audio';
+import { wav } from './tts-wav-fixture';
 
 const h = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -175,19 +176,33 @@ describe('BufferedNativeTTSClient', () => {
     await done;
   });
 
+  test('highlights word by word from timings estimated on the audio', async () => {
+    const audio = Buffer.from(wav(1, [[0.1, 0.9]])).toString('base64');
+    h.invoke.mockImplementation(async (command: string) => {
+      if (command === 'plugin:native-tts|init') return { success: true };
+      if (command === 'plugin:native-tts|get_all_voices') return { voices: [] };
+      return { data: audio };
+    });
+    const controller = {
+      dispatchSpeakMark: vi.fn(),
+      prepareSpeakWords: vi.fn(),
+      dispatchSpeakWord: vi.fn(),
+    };
+    const client = new BufferedNativeTTSClient(controller as unknown as TTSController);
+    await client.init();
+    expect(client.getCapabilities().wordBoundaries).toBe(true);
+
+    const { done } = speak(client, '<p2/>');
+    for (let i = 0; i < 5; i++) await flush();
+    expect(controller.prepareSpeakWords).toHaveBeenCalledWith(['Next', 'paragraph']);
+    await FakeAudioContext.instances[0]!.advanceTo(5);
+    await done;
+  });
+
   test('lists the system voices like the direct-speak client', async () => {
     const client = await startClient();
     const groups = await client.getVoices('en');
     expect(groups.map((g) => [g.id, g.name])).toEqual([['default', 'System TTS']]);
     expect(groups[0]!.voices.map((v) => v.id)).toEqual(['en-us-x-local']);
-  });
-
-  test('reports a media clock but no word timings', async () => {
-    const client = await startClient();
-    expect(client.getCapabilities()).toMatchObject({
-      mediaClock: true,
-      gapControl: true,
-      wordBoundaries: false,
-    });
   });
 });
