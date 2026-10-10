@@ -411,9 +411,9 @@ class NativeTTSPlugin(private val activity: Activity) : Plugin(activity) {
                         ?: findVoice(id)?.also { lastSynthesisVoice = id to it }
                 }
                 if (voice != null) {
-                    tts.voice = voice
+                    tts.setVoice(voice)
                 } else if (!args.lang.isNullOrEmpty()) {
-                    tts.language = Locale.forLanguageTag(args.lang)
+                    tts.setLanguage(Locale.forLanguageTag(args.lang))
                 }
                 // Always render at the engine's normal rate: the playback rate is
                 // applied by the app's player, which keeps the audio reusable.
